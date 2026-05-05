@@ -31,7 +31,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, mean_absolute_error
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import copy
@@ -125,8 +127,14 @@ print(f"Preprocessed data saved to {output_path}")
 
 # Convert 'Time' to datetime
 df['Time_dt'] = pd.to_datetime(df['Time'], format='%H:%M', errors='coerce')
-# Convert 'Date' to datetime
+# Normalize date separators: 2024 CSV uses '/' while others use '-'
+# pandas infers format from first rows and silently fails on mixed formats in the same column
+df['Date'] = df['Date'].str.replace('/', '-', regex=False)
 df['Date_dt'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
+n_bad_dates = df['Date_dt'].isna().sum()
+if n_bad_dates > 0:
+    print(f"Warning: {n_bad_dates} rows have unparseable dates and will be dropped")
+    df = df.dropna(subset=['Date_dt'])
 
 # Adjust time normalization to match TTC operating hours (6AM to 1:30AM)
 # First, convert to minutes since midnight
@@ -156,24 +164,25 @@ df['time_norm'] = df['time_norm'].clip(0, 1)
 # 3. More interpretable for TTC operators and stakeholders
 # 4. Better captures real-world transit operational patterns
 
-# Extract month (1-12) for seasonal patterns
-df['month'] = df['Time_dt'].dt.month
+# Extract month (1-12) for seasonal patterns — must use Date_dt, not Time_dt
+# Time_dt is parsed from HH:MM only, so dt.month defaults to 1900-01-01 (month=1) for all rows
+df['month'] = df['Date_dt'].dt.month
 
 # Extract day of week (0=Monday, 1=Tuesday, ..., 6=Sunday) for weekly patterns
-df['day_of_week'] = df['Time_dt'].dt.dayofweek
+df['day_of_week'] = df['Date_dt'].dt.dayofweek
 
-# Create weekend flag (Friday evening and weekends have different delay patterns)
-df['is_weekend'] = df['Time_dt'].dt.dayofweek.isin([4, 5, 6]).astype(int)  # Friday=4, Saturday=5, Sunday=6
+# Create weekend flag (Saturday=5, Sunday=6)
+df['is_weekend'] = df['Date_dt'].dt.dayofweek.isin([5, 6]).astype(int)
 
-# Create rush hour flags (TTC has distinct morning and evening rush patterns)
+# Create rush hour flags — hour correctly comes from Time_dt
 df['is_morning_rush'] = ((df['Time_dt'].dt.hour >= 7) & (df['Time_dt'].dt.hour <= 9)).astype(int)
 df['is_evening_rush'] = ((df['Time_dt'].dt.hour >= 16) & (df['Time_dt'].dt.hour <= 18)).astype(int)
 
-# Create holiday season flags (December/January have different patterns)
-df['is_holiday_season'] = df['Time_dt'].dt.month.isin([12, 1]).astype(int)
+# Create holiday season flags
+df['is_holiday_season'] = df['Date_dt'].dt.month.isin([12, 1]).astype(int)
 
 # Create back-to-school season flag (September has increased delays)
-df['is_back_to_school'] = df['Time_dt'].dt.month.isin([9]).astype(int)
+df['is_back_to_school'] = df['Date_dt'].dt.month.isin([9]).astype(int)
 
 print("\nTemporal feature distribution:")
 print(f"Weekend trips: {df['is_weekend'].sum()} / {len(df)} ({df['is_weekend'].mean()*100:.1f}%)")
@@ -241,9 +250,23 @@ X_is_back_to_school = df['is_back_to_school'].values.reshape(-1, 1)
 
 # One-hot encode delay severity for multi-class classification
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.utils.class_weight import compute_class_weight
 # Update parameter name from 'sparse' to 'sparse_output' for newer scikit-learn versions
 encoder = OneHotEncoder(sparse_output=False)
 y_severity = encoder.fit_transform(df['delay_severity'].values.reshape(-1, 1))
+
+# Compute class weights to handle imbalanced severity distribution.
+# Use sqrt of the balanced weights so we nudge toward minority classes without
+# flipping the majority class entirely — 'balanced' alone was too aggressive here.
+severity_label_array = np.argmax(y_severity, axis=1)
+class_weights_array = compute_class_weight(
+    'balanced',
+    classes=np.unique(severity_label_array),
+    y=severity_label_array
+)
+class_weights_array = np.sqrt(class_weights_array)  # soften: sqrt dampens extreme ratios
+class_weights_array = class_weights_array / class_weights_array.sum() * len(class_weights_array)  # renormalize
+severity_class_weights = torch.tensor(class_weights_array, dtype=torch.float32)
 
 # Standardize the delay length for better regression performance
 scaler = StandardScaler()
@@ -255,13 +278,20 @@ X_time_sin = np.sin(2 * np.pi * X_time)
 X_time_cos = np.cos(2 * np.pi * X_time)
 X_time_feats = np.concatenate([X_time, X_time_sin, X_time_cos], axis=1)
 
-# Combine all temporal features: time of day + categorical temporal patterns
-# This comprehensive approach captures both continuous time patterns (hour of day)
-# and categorical patterns (weekday vs weekend, rush hours, seasons)
+# Cyclical encoding for month and day_of_week so the model understands
+# that December→January and Sunday→Monday are "close" (not discontinuous)
+X_month_sin = np.sin(2 * np.pi * X_month / 12)
+X_month_cos = np.cos(2 * np.pi * X_month / 12)
+X_dow_sin = np.sin(2 * np.pi * X_day_of_week / 7)
+X_dow_cos = np.cos(2 * np.pi * X_day_of_week / 7)
+
+# Combine all temporal features
 X_temporal = np.concatenate([
     X_time_feats,           # time_norm, sin, cos (3 features)
-    X_month,                # month (1 feature)
-    X_day_of_week,          # day of week (1 feature)
+    X_month_sin,            # month cyclical (2 features)
+    X_month_cos,
+    X_dow_sin,              # day-of-week cyclical (2 features)
+    X_dow_cos,
     X_is_weekend,           # weekend flag (1 feature)
     X_is_morning_rush,      # morning rush flag (1 feature)
     X_is_evening_rush,      # evening rush flag (1 feature)
@@ -270,7 +300,7 @@ X_temporal = np.concatenate([
 ], axis=1)
 
 print(f"Temporal features shape: {X_temporal.shape}")
-print("Features: [time_norm, sin, cos, month, day_of_week, is_weekend, is_morning_rush, is_evening_rush, is_holiday_season, is_back_to_school]")
+print("Features: [time_norm, sin, cos, month_sin, month_cos, dow_sin, dow_cos, is_weekend, is_morning_rush, is_evening_rush, is_holiday_season, is_back_to_school]")
 
 # Train/test split - stratify by delay severity to ensure balanced distribution
 from sklearn.model_selection import train_test_split
@@ -318,13 +348,11 @@ test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 
 class MultiOutputModel(nn.Module):
-    def __init__(self, num_stations, num_severity_classes=4, embedding_dim=16, temporal_features=10):
+    def __init__(self, num_stations, num_severity_classes=4, embedding_dim=16, temporal_features=12):
         super(MultiOutputModel, self).__init__()
         self.station_embedding = nn.Embedding(num_stations, embedding_dim)
         
-        # Input dimension = temporal_features (10 total: time_norm, sin, cos, month, day_of_week, 
-        # is_weekend, is_morning_rush, is_evening_rush, is_holiday_season, is_back_to_school) + embedding_dim (station)
-        # This gives the model rich temporal context for better delay prediction
+        # Input: 12 temporal features + 16-dim station embedding = 28 total
         input_dim = temporal_features + embedding_dim
         
         # Shared layers with batch normalization
@@ -340,11 +368,12 @@ class MultiOutputModel(nn.Module):
         )
         
         # Delay severity classification head (multi-class)
+        # No Softmax here — CrossEntropyLoss applies log-softmax internally;
+        # stacking Softmax before it squashes values into [0,1] and produces log(~0) = NaN
         self.severity_layers = nn.Sequential(
             nn.Linear(32, 16),
             nn.ReLU(),
-            nn.Linear(16, num_severity_classes),
-            nn.Softmax(dim=1)
+            nn.Linear(16, num_severity_classes)
         )
         
         # Delay length head (regression)
@@ -377,7 +406,7 @@ embedding_dim = 16
 # Temporal features now include: time_norm, sin, cos, month, day_of_week, is_weekend, is_morning_rush, is_evening_rush, is_holiday_season, is_back_to_school
 temporal_features = 10
 num_severity_classes = len(encoder.categories_[0])
-model = MultiOutputModel(num_stations=num_stations, num_severity_classes=num_severity_classes, embedding_dim=embedding_dim, temporal_features=10).to(device)
+model = MultiOutputModel(num_stations=num_stations, num_severity_classes=num_severity_classes, embedding_dim=embedding_dim, temporal_features=12).to(device)
 print(model)
 
 
@@ -392,7 +421,8 @@ print(model)
 
 
 # Loss functions for multi-task learning
-ce_loss = nn.CrossEntropyLoss()  # For severity classification
+# Class weights address the heavy imbalance toward Minimal/Minor delays
+ce_loss = nn.CrossEntropyLoss(weight=severity_class_weights.to(device))
 mse_loss = nn.MSELoss()          # For delay length regression
 
 # Weights for multi-task loss balancing
@@ -440,6 +470,7 @@ for epoch in range(num_epochs):
         loss = severity_loss_weight * loss_severity + length_loss_weight * loss_length
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         running_train_loss += loss.item() * temporal_batch.size(0)
@@ -520,6 +551,84 @@ for epoch in range(num_epochs):
 if best_model_wts is not None:
     model.load_state_dict(best_model_wts)
     print("Loaded best model weights")
+
+# =============================================================================
+# EVALUATION
+# =============================================================================
+model.eval()
+all_true_severity = []
+all_pred_severity = []
+all_true_length = []
+all_pred_length = []
+
+with torch.no_grad():
+    for batch in test_loader:
+        temporal_batch, station_batch, length_batch, severity_batch = batch
+        temporal_batch = temporal_batch.to(device)
+        station_batch = station_batch.to(device)
+        length_batch = length_batch.to(device)
+        severity_batch = severity_batch.to(device)
+
+        out_severity, out_length = model(temporal_batch, station_batch)
+
+        _, predicted = torch.max(out_severity, 1)
+        true_labels = torch.argmax(severity_batch, dim=1)
+        all_pred_severity.extend(predicted.cpu().numpy())
+        all_true_severity.extend(true_labels.cpu().numpy())
+
+        all_pred_length.extend(out_length.cpu().numpy().flatten())
+        all_true_length.extend(length_batch.cpu().numpy().flatten())
+
+all_true_severity = np.array(all_true_severity)
+all_pred_severity = np.array(all_pred_severity)
+
+# Convert standardized delay lengths back to minutes
+all_pred_length_min = scaler.inverse_transform(
+    np.array(all_pred_length).reshape(-1, 1)).flatten()
+all_true_length_min = scaler.inverse_transform(
+    np.array(all_true_length).reshape(-1, 1)).flatten()
+
+severity_labels = list(encoder.categories_[0])
+
+# Majority-class baseline accuracy
+majority_class = np.bincount(all_true_severity).argmax()
+baseline_acc = (all_true_severity == majority_class).mean()
+
+# Model metrics
+weighted_f1 = f1_score(all_true_severity, all_pred_severity, average='weighted')
+macro_f1 = f1_score(all_true_severity, all_pred_severity, average='macro')
+overall_acc = (all_true_severity == all_pred_severity).mean()
+mae_minutes = mean_absolute_error(all_true_length_min, all_pred_length_min)
+rmse_minutes = np.sqrt(np.mean((all_true_length_min - all_pred_length_min) ** 2))
+
+print("\n" + "="*60)
+print("BENCHMARK RESULTS")
+print("="*60)
+print(f"\nSeverity Classification")
+print(f"  Majority-class baseline accuracy : {baseline_acc:.1%}  (always predict '{severity_labels[majority_class]}')")
+print(f"  Model accuracy                   : {overall_acc:.1%}")
+print(f"  Weighted F1                      : {weighted_f1:.3f}")
+print(f"  Macro F1                         : {macro_f1:.3f}")
+print(f"\nPer-Class Report:")
+print(classification_report(all_true_severity, all_pred_severity,
+                            target_names=severity_labels, digits=3))
+print(f"\nDelay Length Regression (original minutes)")
+print(f"  MAE  : {mae_minutes:.2f} min")
+print(f"  RMSE : {rmse_minutes:.2f} min")
+print("="*60)
+
+# Confusion matrix
+cm = confusion_matrix(all_true_severity, all_pred_severity)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=severity_labels, yticklabels=severity_labels)
+plt.title('Confusion Matrix — Delay Severity')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.tight_layout()
+plt.savefig('confusion_matrix.png', dpi=150)
+plt.show()
+print("Confusion matrix saved to confusion_matrix.png")
 
 
 # ## 5. Plot Training Curves
@@ -609,10 +718,14 @@ with torch.no_grad():
                     
                     # Create temporal features for this specific month/day combination
                     temporal_features = np.array([
-                        t, time_grid_sin[i], time_grid_cos[i],  # time features (3)
-                        month, day_of_week, is_weekend,         # date features (3)
-                        is_morning_rush, is_evening_rush,       # rush hour features (2)
-                        is_holiday_season, is_back_to_school    # seasonal features (2)
+                        t, time_grid_sin[i], time_grid_cos[i],               # time features (3)
+                        np.sin(2 * np.pi * month / 12),                       # month cyclical (2)
+                        np.cos(2 * np.pi * month / 12),
+                        np.sin(2 * np.pi * day_of_week / 7),                  # dow cyclical (2)
+                        np.cos(2 * np.pi * day_of_week / 7),
+                        is_weekend,                                            # binary flags (5)
+                        is_morning_rush, is_evening_rush,
+                        is_holiday_season, is_back_to_school
                     ], dtype=np.float32)
                     
                     temporal_input = torch.tensor([temporal_features], device=device)
