@@ -1,6 +1,6 @@
 # TTC Subway Delay Predictor
 
-**[Live Demo](#)** · [GitHub](https://github.com/xiaotong-shen/subway-delay-ml-predictor) · Python · PyTorch · Streamlit · Plotly · Pandas
+**[Live Demo](#)** · [GitHub](https://github.com/xiaotong-shen/subway-delay-ml-predictor) · Python · scikit-learn · Streamlit · Plotly · Pandas
 
 ---
 
@@ -20,46 +20,41 @@ After the datathon, I rebuilt this project independently from scratch — new mo
 
 ### The Model
 
-The datathon model used a single normalized time float as input. That felt wrong to me — a continuous timestamp treats 11:55 PM and 12:05 AM as close to each other, and treats a Tuesday rush hour the same as a Saturday afternoon. Transit delays don't work like that.
+The datathon model used a single normalized time float as input. That felt wrong — a continuous timestamp treats 11:55 PM and 12:05 AM as close to each other, and treats a Tuesday rush hour the same as a Saturday afternoon. Transit delays don't work like that.
 
-So I redesigned the feature set around **categorical temporal patterns**:
+So I redesigned the features around **operational context flags**:
 
 ```
-time_norm        → Normalized position within TTC operating hours (6AM–1:30AM)
-month            → Seasonal effects (back-to-school in September, holiday chaos in December)
-day_of_week      → Weekly rhythm (Monday ≠ Friday ≠ Sunday)
-is_weekend       → Binary service pattern flag
-is_morning_rush  → 7–9 AM flag
-is_evening_rush  → 4–6 PM flag
-is_holiday_season → December/January flag
-is_back_to_school → September flag
+is_morning_rush   → 7–9 AM
+is_evening_rush   → 4–6 PM
+is_weekend        → Saturday / Sunday
+is_holiday_season → December / January
+is_back_to_school → September
++ station identity, time_norm, month, day_of_week
++ station_mean_delay (explicit historical prior per station)
 ```
 
-Combined with a **16-dimensional station embedding**, the model takes 26 inputs total — up from 3 in the original. The architecture is a multi-output network with two heads: one for **delay severity classification** (Minimal / Minor / Moderate / Severe) and one for **delay length regression** (minutes). Loss is weighted 60/40 in favour of the classification head. I added early stopping and a learning rate scheduler to keep it from overfitting.
+Training data: **~31,000 delay records** spanning 2021–2024, capped at 60-minute delays to exclude rare extreme incidents that would skew group averages. Delays were then **aggregated by operational context** — 1,171 station-context groups averaging 26 events each — before training. The model predicts group averages rather than individual events.
 
-Training data: **277,200 records** spanning 2021–2024 across all active TTC subway lines. I excluded the SRT (discontinued) and a handful of sparse/unclassifiable line codes that would have added noise without meaningful signal.
+### Model Selection
 
-### Model Performance
+I benchmarked four approaches on the same aggregated dataset with an 80/20 train-test split:
 
-The model is evaluated against a majority-class baseline — the accuracy you'd get by always predicting the most common severity category ("Moderate").
+| Model | Accuracy | Weighted F1 | Macro F1 | MAE |
+|---|---|---|---|---|
+| Majority-class baseline | 59.1% | 0.440 | 0.248 | 2.15 min |
+| Neural Network (PyTorch) | 60.4% | 0.588 | 0.458 | 2.09 min |
+| XGBoost | 62.6% | 0.605 | 0.491 | 2.17 min |
+| LightGBM | 58.7% | 0.587 | 0.485 | 2.20 min |
+| **Random Forest** | **65.1%** | **0.629** | **0.502** | **2.07 min** |
 
-| Metric | Value |
-|---|---|
-| Majority-class baseline accuracy | 59.1% |
-| **Model accuracy** | **60.4%** ✓ beats baseline |
-| **Weighted F1** | **0.588** |
-| **Macro F1** | **0.458** |
-| Random 3-class baseline (F1) | 0.333 |
-| **Delay length MAE** | **2.09 min** |
-| Delay length RMSE | 3.61 min |
+Random Forest won across every classification metric and matched the NN on regression MAE. Tree-based models tend to outperform neural networks on small tabular datasets — this confirmed that. The production model is Random Forest.
 
-The model beats the majority baseline on both accuracy and F1. Macro F1 (0.458 vs 0.333 random) is the honest number — it weights all three classes equally and doesn't flatter the majority class. The regression head is the most reliable output: a MAE of 2.09 minutes on average delay prediction is practically useful for a transit tool.
+**Why aggregation was the key insight:** training on individual delay records is the wrong target. A single train's delay severity depends on the specific incident (signal failure, door issue, passenger assistance), not the time or station. What *is* learnable is the average pattern: "Bloor-Yonge during morning rush on weekdays averages 7 minutes." Aggregating to 1,171 groups halved the regression MAE and lifted all classification metrics. The severity bins were set at the 25th/75th percentile of group averages (~5 and ~9 min) to give a roughly balanced three-class split.
 
-**What changed from the datathon model to get here:**
+**Feature importances (XGBoost):** `n_events` (group data density) and `station_mean_delay` (explicit station prior) ranked first and second — confirming that adding the historical station average as an explicit feature was the right call rather than relying solely on a learned embedding.
 
-*Three bugs fixed first.* The datathon code extracted `month`, `day_of_week`, and `is_weekend` from the time column (`HH:MM`) instead of the date column — parsing `"13:45"` with `%H:%M` defaults to `1900-01-01`, making five features constant noise. The severity head had `Softmax` before `CrossEntropyLoss`, which applies its own log-softmax — the double application pushed values into `log(~0)` = `-inf`, producing `NaN` loss silently for every epoch. The 2024 CSV uses `/` date separators while 2021–2023 use `-`; pandas infers format from the first rows and silently dropped 24K records.
-
-*Then the key insight for accuracy:* training on individual delay records is the wrong target. A single train's delay severity is mostly determined by the specific incident, not by the time or station — that's fundamentally unpredictable from the features available. What *is* learnable is the average pattern: "Bloor-Yonge during morning rush on weekdays averages 7 minutes." So I aggregated training data by operational context `(station × is_morning_rush × is_evening_rush × is_weekend × seasonal flags)` — 1,171 groups averaging 26 events each — and trained the model to predict group averages. This halved the MAE and improved all classification metrics. The severity bins were also rebalanced to the 25th/75th percentile split of group averages (~5 and ~9 min), giving a roughly balanced class distribution rather than 60% minority.
+**Three bugs fixed in the datathon code before any measurement was meaningful:** date features (`month`, `day_of_week`, `is_weekend`) were extracted from the time column instead of the date column, making them constant; `Softmax` before `CrossEntropyLoss` produced silent `NaN` loss every epoch; the 2024 CSV used `/` date separators causing pandas to silently drop 24K records.
 
 ### The Frontend Decision: Pre-Compute Everything
 
@@ -88,8 +83,9 @@ Controls live in the sidebar: hour slider, month selector, day-of-week selector,
 
 | Layer | Tech |
 |---|---|
-| Model | PyTorch (multi-output NN, station embeddings) |
-| Data | Pandas, scikit-learn, 277K records (2021–2024) |
+| Model | scikit-learn Random Forest (classifier + regressor) |
+| Data | Pandas, ~31K records aggregated to 1,171 groups (2021–2024) |
+| Benchmarking | NN, XGBoost, LightGBM, RF compared on same split |
 | Frontend | Streamlit, Plotly, custom CSS |
 | Serving | Pre-computed CSV lookup, no runtime inference |
 
@@ -105,12 +101,13 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-To retrain the model, run `python notebooks/neuralnet.py` from the `python notebooks/` directory. Training data CSVs are included.
+To retrain: run `python train_model.py` from the `python notebooks/` directory (Random Forest, ~10s). The original neural network is in `neuralnet.py` for reference. Training data CSVs are not included in the repo — download from [open.toronto.ca](https://open.toronto.ca/dataset/ttc-subway-delay-data/).
 
 ---
 
 ## What I'd Do Next
 
-- Pull live TTC delay feeds (the open data API exists) to add a "right now" layer on top of the historical predictions
-- Expand the model to predict delay *cause* categories (mechanical, signal, passenger assistance) — the delay code column in the raw data has this but I left it out of v1
-- Surface the station ranking analysis I have commented out in `app.py` — it's built, just not exposed yet
+- **Delay cause classification** — the raw data has delay code columns (mechanical, signal, passenger assistance) that I dropped. Training a separate classifier on those codes and surfacing it in the UI would make the severity predictions much more interpretable.
+- **SMOTE or oversampling for the Severe class** — Severe delays (F1: 0.19) are the hardest to predict and the most useful to catch. Synthetic oversampling during training could improve recall without sacrificing precision on the other classes.
+- **Live TTC feed layer** — the TTC open data API publishes real-time delay events. Layering that on top of the historical predictions would let the map show "predicted risk" vs "happening right now."
+- **Station ranking panel** — the analysis is already built and commented out in `app.py`; just needs wiring up to the UI.
