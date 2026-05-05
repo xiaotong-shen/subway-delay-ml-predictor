@@ -72,11 +72,7 @@ I built the frontend in **Streamlit** with custom CSS for a dark-mode aesthetic.
 
 Controls live in the sidebar: hour slider, month selector, day-of-week selector, station picker. Changing any of them instantly re-filters the pre-computed dataset and re-renders the map. On the right panel, a selected station shows its current prediction (likelihood, severity, expected delay in minutes) alongside a **daily timeline chart** — so you can see not just "is Tuesday at 8 AM bad?" but the full shape of the day for that stop.
 
-![Main Interface](images/main-interface.png)
-![Interactive Map](images/interactive-map.png)
-![User Controls](images/user-controls.png)
-![Risk Assessment](images/risk-assessment.png)
-
+![demo](images/demo.gif)
 ---
 
 ## Stack
