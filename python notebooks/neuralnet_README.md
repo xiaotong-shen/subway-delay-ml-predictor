@@ -3,7 +3,50 @@
 ## Overview
 This document outlines the key design decisions, implementation choices, and learning outcomes from developing the TTC subway delay prediction neural network system.
 
-Note: Most of the changes made to the neuralnet.py file is in consideration that the prediction data is going to be used a reference for user queries. 
+Note: Most of the changes made to the neuralnet.py file is in consideration that the prediction data is going to be used a reference for user queries.
+
+---
+
+## 0. Post-Datathon Improvements & Bug Fixes
+
+After the datathon, I added formal benchmarking and found several issues that needed fixing before any metrics were meaningful.
+
+### Bugs Fixed
+
+**Bug 1 — Date features extracted from wrong column.** `month`, `day_of_week`, `is_weekend`, `is_holiday_season`, and `is_back_to_school` were all pulling from `Time_dt` (parsed from `HH:MM`) instead of `Date_dt`. Parsing `"13:45"` with `%H:%M` defaults to `1900-01-01`, making those five features constant across all rows. Fixed to use `Date_dt`.
+
+**Bug 2 — Softmax + CrossEntropyLoss double application.** The severity head had `Softmax` as its final activation, but `CrossEntropyLoss` applies `log_softmax` internally. Stacking them pushes values into `log(~0)` = `-inf`, producing `NaN` loss silently from epoch 1. The model appeared to train (no error thrown) but never updated weights. Fixed by removing `Softmax` from the model head.
+
+**Bug 3 — 2024 date format normalization.** The 2024 CSV uses `/` separators (`2024/01/01`) while 2021–2023 use `-`. After `pd.concat`, pandas infers format from the first rows and silently coerces the 2024 dates to `NaT`, dropping 24K records from training. Fixed by normalizing separators before parsing.
+
+### Key Accuracy Improvement — Aggregate Before Training
+
+Training on individual delay records is the wrong target for this use case. A single train's delay severity is largely determined by the specific incident (signal failure, passenger assistance, etc.), not by the temporal and station features the model has access to. That's fundamentally unpredictable.
+
+What *is* learnable is the **average pattern**: "Bloor-Yonge during morning rush on weekdays in September averages 7.5 minutes of delay." The pre-computed lookup the frontend uses is exactly this kind of average — so training data should match.
+
+Fix: aggregate by operational context flags `(station, is_morning_rush, is_evening_rush, is_weekend, is_holiday_season, is_back_to_school)` → 1,171 groups averaging 26 events each. Train on group averages. This halved the MAE and improved all classification metrics.
+
+**Why not aggregate by (station, hour, day_of_week, month)?** That's 70 × 24 × 7 × 12 = 141K possible slots against 31K records — average coverage under 1 event per slot. Almost no smoothing happens. The coarser flag-based grouping gives 1,171 groups with real density.
+
+### Severity Bin Rebalancing
+
+Original bins `(-0.1, 1, 5, 15, ∞)` were designed for raw individual delay events. After aggregation, group averages compress toward the center (averages of 26 events don't produce 1-minute or 30-minute averages). The original bins put 95%+ of groups into Minor.
+
+New bins `(-0.1, 5.0, 9.0, ∞)` are set at the 25th and 75th percentiles of group average delays, giving roughly a 25/60/15 class split — all classes are represented and learnable.
+
+### Final Benchmark Results
+
+| Metric | Buggy datathon model | Fixed + aggregated |
+|---|---|---|
+| Model accuracy | ~0% (NaN loss, no learning) | **60.4%** |
+| Weighted F1 | — | **0.588** |
+| Macro F1 | — | **0.458** |
+| Delay length MAE | — | **2.09 min** |
+| RMSE | — | **3.61 min** |
+| Majority-class baseline | 60.7% | 59.1% |
+
+
 
 ---
 
