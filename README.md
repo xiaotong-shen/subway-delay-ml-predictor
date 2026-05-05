@@ -1,6 +1,6 @@
 # TTC Subway Delay Predictor
 
-**[Live Demo](#)** · [GitHub](https://github.com/xiaotong-shen/subway-delay-ml-predictor) · Python · scikit-learn · Streamlit · Plotly · Pandas
+**[Live Demo](https://xiaotong-shen-sdss-datathon-2025-extended-app-zcrsie.streamlit.app/)** · [GitHub](https://github.com/xiaotong-shen/subway-delay-ml-predictor) · Python · scikit-learn · Streamlit · Plotly · Pandas
 
 ---
 
