@@ -64,6 +64,18 @@ def clean_station_names(df, column_name):
     df[column_name] = df[column_name].str.replace(' STATION', '', case=False)
     df[column_name] = df[column_name].str.replace(' ST', '', case=False)
     df[column_name] = df[column_name].str.strip()
+
+    # Normalize dots and abbreviations so predictions match coords file
+    name_map = {
+        'ST GEORGE':               'ST. GEORGE',
+        'ST CLAIR':                'ST. CLAIR',
+        'ST CLAIR WEST':           'ST. CLAIR WEST',
+        'ST PATRICK':              'ST. PATRICK',
+        'ST ANDREW':               'ST. ANDREW',
+        'NORTH YORK CTR':          'NORTH YORK CENTRE',
+        'VAUGHAN MC':              'VAUGHAN METROPOLITAN CENTRE',
+    }
+    df[column_name] = df[column_name].replace(name_map)
     return df
 
 def extract_hour_from_time(time_hhmm):
