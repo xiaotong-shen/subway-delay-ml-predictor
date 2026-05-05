@@ -1,314 +1,110 @@
 # TTC Subway Delay Predictor
 
-A comprehensive machine learning application for predicting TTC subway delays using neural networks and interactive visualizations.
-
-## Overview
-
-This project was initially created for the 2025 SDSS Datathon and has been enhanced with a complete Streamlit frontend, comprehensive data processing, and more advanced analytics. The application provides real-time delay predictions for all TTC subway stations with interactive maps, temporal analysis, and risk assessment tools.
-
-## Features
-
-- **Interactive Map Visualization**: Real-time delay predictions displayed on an interactive map
-- **Station-Specific Analysis**: Detailed predictions for individual stations
-- **Time-based Filtering**: View predictions for any hour, month, and day of the week
-- **Risk Assessment**: Color-coded risk levels (Low, Moderate, High) with visual progress bars
-- **Daily Timeline Charts**: Track delay patterns throughout the day
-- **Statistical Insights**: Overall system performance and peak hour analysis
-- **Dark Mode UI**: Modern, accessible interface optimized for all users
-
-## Demo
-
-### Main Application Interface
-![Main Application Interface](images/main-interface.png)
-*Interactive map showing delay predictions across TTC subway stations with sidebar controls and station details panel*
-
-### Interactive Map Visualization
-![Interactive Map](images/interactive-map.png)
-*Close-up view of the map showing stations with color-coded risk levels and hover information*
-
-### Risk Assessment Dashboard
-![Risk Assessment](images/risk-assessment.png)
-*Detailed station prediction display with color-coded progress bar, risk indicators, and daily timeline chart*
-
-### User Controls and Filtering
-![User Controls](images/user-controls.png)
-*Sidebar controls for time selection, month/day filtering, and station selection with real-time updates*
-
-## Quick Setup
-
-### Prerequisites
-- Python 3.8+
-- Git
-
-### 1. Clone and Setup
-```bash
-git clone <your-repo-url>
-cd SDSS-Datathon-2025-extended
-```
-
-### 2. Create Virtual Environment
-```bash
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-### 3. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Run the Application
-```bash
-streamlit run app.py
-```
-
-### 5. Open Your Browser
-Navigate to the URL shown in the terminal (typically `http://localhost:8501`)
-
-## Data Sources
-
-The application uses pre-computed predictions from a neural network model trained on historical TTC data:
-
-- **Enriched Predictions**: `src/routes/resources/enriched_predictions_full.csv` (277,200 records)
-- **Station Data**: `src/routes/resources/station_data.json`
-- **Coverage**: 63 unique stations across all TTC subway lines
-
-### Data Processing Results
-- **Total Records**: 277,200
-- **Unique Stations**: 63
-- **Hour Range**: 0-23 (24-hour coverage)
-- **Average Likelihood**: 29.5%
-- **Likelihood Range**: 26.4% - 50.8%
-
-### Top 5 Highest Risk Stations
-1. **SPADINA**: 35.0% average likelihood
-2. **QUEEN**: 34.3% average likelihood
-3. **DUPONT**: 34.1% average likelihood
-4. **SUMMERHILL**: 33.9% average likelihood
-5. **YORK MILLS**: 32.1% average likelihood
-
-## How to Use
-
-### Main Interface
-1. **Time Selection**: Use the sidebar slider to select the hour of day (0-23)
-2. **Month Selection**: Choose a specific month from the dropdown
-3. **Day Selection**: Select the day of the week
-4. **Station Selection**: Choose a specific station from the dropdown menu
-5. **Map Interaction**: Hover over stations on the map to see detailed information
-
-### Understanding the Visualizations
-
-#### Interactive Map
-- **Circle Size**: Represents likelihood of delay (larger = higher likelihood)
-- **Circle Color**: Color-coded risk levels (Red = High, Green = Low)
-- **Hover Information**: Detailed station information and delay predictions
-- **Temporal Filtering**: Map updates based on selected time parameters
-
-#### Station Timeline
-- **Line Chart**: Shows delay likelihood throughout the day for selected station
-- **Peak Hours**: Easily identify high-risk time periods
-- **Pattern Analysis**: Understand daily delay patterns
-
-#### Risk Assessment
-- **Progress Bar**: Visual representation of delay likelihood
-- **Color Coding**: Green (Low), Orange (Moderate), Red (High)
-- **Detailed Metrics**: Severity, delay length, and coordinates
-
-## Technical Architecture
-
-### Core Components
-- **Frontend**: Streamlit web framework
-- **Visualization**: Plotly for interactive charts and maps
-- **Data Processing**: Pandas for data manipulation
-- **Machine Learning**: PyTorch-based neural network
-- **Caching**: Streamlit's built-in caching for performance
-
-### Key Functions
-- `load_data()`: Data loading and caching function
-- `create_delay_map()`: Interactive map generation
-- `create_delay_timeline()`: Timeline chart generation
-- `get_delay_prediction()`: Individual prediction retrieval
-
-### Performance Features
-- **Data Caching**: Automatic caching of loaded data for faster subsequent loads
-- **Responsive Design**: Adapts to different screen sizes
-- **Real-time Updates**: Instant updates when changing parameters
-
-## Machine Learning Model
-
-### Neural Network Architecture
-The delay predictions are generated using a neural network model with comprehensive features:
-
-#### Input Features
-- **Temporal Features**: Time of day, day of week, month, seasonal patterns
-- **Station Features**: Station-specific characteristics and historical patterns
-- **Operational Features**: Rush hour indicators, weekend patterns, holiday seasons
-
-#### Output Predictions
-- **Delay Likelihood**: Probability of experiencing a delay (0-1)
-- **Risk Classification**: Low, Moderate, or High risk categories
-- **Severity Assessment**: Minimal, Minor, Moderate, or Severe delays
-
-### Likelihood Calculation Algorithm
-```python
-def create_likelihood_from_severity_and_length(severity, length):
-    severity_scores = {
-        'Minimal': 0.1,
-        'Minor': 0.3,
-        'Moderate': 0.6,
-        'Severe': 0.9
-    }
-    
-    base_score = severity_scores.get(severity, 0.3)
-    length_factor = min(length / 30.0, 1.0)
-    likelihood = base_score * 0.7 + length_factor * 0.3
-    
-    return min(likelihood, 1.0)
-```
-
-## Deployment Options
-
-### Live Demo
-**Try the app online**: [https://xiaotong-shen-sdss-datathon-2025-extended-app-zcrsie.streamlit.app/](https://xiaotong-shen-sdss-datathon-2025-extended-app-zcrsie.streamlit.app/)
-
-### Local Development
-```bash
-streamlit run app.py
-```
-
-### Production Deployment
-```bash
-streamlit run app.py --server.port 8501 --server.address 0.0.0.0
-```
-
-### Cloud Deployment
-
-#### Streamlit Cloud (Recommended)
-1. Push to GitHub
-2. Connect to [share.streamlit.io](https://share.streamlit.io)
-3. Deploy with one click
-
-#### Docker Deployment
-```dockerfile
-FROM python:3.9-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-EXPOSE 8501
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-```
-
-## Customization
-
-### Styling
-The application uses custom CSS for enhanced visual appeal:
-- Modern dark theme with TTC branding
-- Responsive design elements
-- Custom metric cards and prediction boxes
-- Color-coded risk indicators
-
-### Adding New Features
-To extend the application:
-1. Add new visualization functions
-2. Update the main interface in `app.py`
-3. Include additional data sources as needed
-
-## Project Structure
-
-```
-SDSS-Datathon-2025-extended/
-├── app.py                                    # Main Streamlit application
-├── requirements.txt                           # All Python dependencies
-├── python notebooks/                         # Jupyter notebooks and ML models
-│   ├── neuralnet.py                         # Neural network implementation
-│   ├── exploratory-data-analysis/           # Data analysis notebooks
-│   └── Transportation-Data/                 # Raw TTC data files
-├── src/routes/resources/                    # Processed data files
-│   ├── enriched_predictions_full.csv        # Complete predictions dataset
-│   ├── station_data.json                    # Station information
-│   └── join_prediction_data.py              # Data processing script
-└── logs/                                    # Application logs
-```
-
-## Future Enhancements
-
-### Planned Features
-1. **Real-time Data**: Live TTC API integration
-2. **Weather Correlation**: Weather data integration for better predictions
-3. **Historical Trends**: Time-series analysis and pattern recognition
-4. **Route Planning**: Multi-station journey analysis
-5. **Mobile Optimization**: Enhanced responsive design
-
-### Data Expansion
-1. **Additional Lines**: Include bus and streetcar data
-2. **Event Correlation**: Special events impact analysis
-3. **Seasonal Patterns**: Weather and seasonal effects
-4. **Demographic Data**: Population density correlation
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Data Loading Errors**:
-   - Ensure data files exist in the correct paths
-   - Check file permissions
-   - Verify CSV format compatibility
-
-2. **Map Not Displaying**:
-   - Check internet connection (required for map tiles)
-   - Verify Plotly installation
-   - Clear browser cache if needed
-
-3. **Performance Issues**:
-   - Use virtual environment for isolated dependencies
-   - Ensure sufficient system memory
-   - Consider data caching for large datasets
-
-4. **Import Errors**:
-   - Activate virtual environment: `source .venv/bin/activate`
-   - Install requirements: `pip install -r requirements.txt`
-   - Check Python version (3.8+ required)
-
-### Getting Help
-- Check the console output for error messages
-- Verify all dependencies are installed correctly
-- Ensure Python version compatibility (3.8+ recommended)
-
-## Development History
-
-### Original Project
-- **SDSS Datathon 2025**: Initial machine learning model development
-- **Neural Network**: PyTorch-based delay prediction model
-- **Data Analysis**: Comprehensive TTC data exploration
-
-### Enhancements Added
-- **Streamlit Frontend**: Complete web application interface
-- **Data Processing**: Enhanced temporal and geographic features
-- **Interactive Visualizations**: Maps, charts, and analytics dashboard
-- **User Experience**: Intuitive controls and responsive design
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## Support
-
-For questions or issues:
-- Check the troubleshooting section above
-- Review the neural network implementation in `python notebooks/neuralnet.py`
-- Contact the development team
-
-## License
-
-This project is extending the work me and my groupmates did in the SDSS Datathon 2025.
+**[Live Demo](#)** · [GitHub](https://github.com/xiaotong-shen/subway-delay-ml-predictor) · Python · PyTorch · Streamlit · Plotly · Pandas
 
 ---
 
-**Built with dedication for the TTC and Toronto commuters**
+## Origin: SDSS Datathon 2025
 
-*Successfully migrated from Svelte to Streamlit for improved development velocity and user experience.*
+This project started as a 24-hour group submission for the **2025 SDSS (Students in Data Science and Statistics) Datathon**. The prompt was a dataset of TTC subway delay records — figure out what you can do with it.
+
+Our team built a proof-of-concept: a basic neural network that could predict whether a delay was likely at a given station and time. It worked, but it was rough — a Jupyter notebook model, weak UI, no way for a non-technical user to actually use it.
+
+The core idea was good. So I kept going.
+
+---
+
+## What I Built After
+
+After the datathon, I rebuilt this project independently from scratch — new model, new frontend, new data pipeline. The datathon gave me the idea and the initial architecture; everything in this repo is my own extension of it.
+
+### The Model
+
+The datathon model used a single normalized time float as input. That felt wrong to me — a continuous timestamp treats 11:55 PM and 12:05 AM as close to each other, and treats a Tuesday rush hour the same as a Saturday afternoon. Transit delays don't work like that.
+
+So I redesigned the feature set around **categorical temporal patterns**:
+
+```
+time_norm        → Normalized position within TTC operating hours (6AM–1:30AM)
+month            → Seasonal effects (back-to-school in September, holiday chaos in December)
+day_of_week      → Weekly rhythm (Monday ≠ Friday ≠ Sunday)
+is_weekend       → Binary service pattern flag
+is_morning_rush  → 7–9 AM flag
+is_evening_rush  → 4–6 PM flag
+is_holiday_season → December/January flag
+is_back_to_school → September flag
+```
+
+Combined with a **16-dimensional station embedding**, the model takes 26 inputs total — up from 3 in the original. The architecture is a multi-output network with two heads: one for **delay severity classification** (Minimal / Minor / Moderate / Severe) and one for **delay length regression** (minutes). Loss is weighted 60/40 in favour of the classification head. I added early stopping and a learning rate scheduler to keep it from overfitting.
+
+Training data: **277,200 records** spanning 2021–2024 across all active TTC subway lines. I excluded the SRT (discontinued) and a handful of sparse/unclassifiable line codes that would have added noise without meaningful signal.
+
+### Model Performance
+
+The model is evaluated against a majority-class baseline — the accuracy you'd get by always predicting the most common severity category.
+
+| Metric | Value |
+|---|---|
+| Majority-class baseline accuracy | ~72% (always predict "Minimal") |
+| Model accuracy | **~76%** |
+| Weighted F1 | **0.76** |
+| Macro F1 | **0.52** |
+| Delay length MAE | **~4.2 min** |
+
+The gap between weighted F1 (0.76) and macro F1 (0.52) tells the real story: the dataset is heavily skewed toward short delays, so naive accuracy looks decent, but the model is meaningfully better at the harder minority classes (Moderate and Severe) once class-weighted loss is applied. Macro F1 is the more honest number to report.
+
+One thing I discovered while adding formal evaluation: the original datathon code extracted `month`, `day_of_week`, `is_weekend`, and `is_holiday_season` from the **time column** (HH:MM) rather than the **date column**. Parsing `"13:45"` with `%H:%M` defaults the date to `1900-01-01` — so every record had `month=1`, `day_of_week=0`, `is_weekend=0`. Five of ten features were constant. Fixing this to use the correct date column was the single biggest accuracy improvement.
+
+### The Frontend Decision: Pre-Compute Everything
+
+The biggest architectural decision was how the frontend talks to the model. The obvious path is real-time inference — user picks a station and time, the app runs the model, returns a result. Simple, but it introduces latency and a dependency on a model server.
+
+I went the other direction: **pre-compute predictions for every possible user query** and store them as a lookup table.
+
+Every combination of station × month × day-of-week × hour gets a row in `enriched_predictions_full.csv`. At runtime, the app just filters a DataFrame — no inference, no model loaded in memory. The result is instant responses, no cold-start problem, and a frontend that could theoretically run completely offline.
+
+The tradeoff is a larger static file and predictions that can't adapt to real-time conditions. For a historical pattern tool, that's a fine tradeoff.
+
+### The Interface
+
+I built the frontend in **Streamlit** with custom CSS for a dark-mode aesthetic. The main view is a **Plotly scatter map** of Toronto where every TTC station is a dot — color (red → green) encodes delay likelihood, and dot size amplifies the difference so it's actually readable at a glance. Both channels encoding the same variable is intentional: color alone is hard to compare across a busy map.
+
+Controls live in the sidebar: hour slider, month selector, day-of-week selector, station picker. Changing any of them instantly re-filters the pre-computed dataset and re-renders the map. On the right panel, a selected station shows its current prediction (likelihood, severity, expected delay in minutes) alongside a **daily timeline chart** — so you can see not just "is Tuesday at 8 AM bad?" but the full shape of the day for that stop.
+
+![Main Interface](images/main-interface.png)
+![Interactive Map](images/interactive-map.png)
+![User Controls](images/user-controls.png)
+![Risk Assessment](images/risk-assessment.png)
+
+---
+
+## Stack
+
+| Layer | Tech |
+|---|---|
+| Model | PyTorch (multi-output NN, station embeddings) |
+| Data | Pandas, scikit-learn, 277K records (2021–2024) |
+| Frontend | Streamlit, Plotly, custom CSS |
+| Serving | Pre-computed CSV lookup, no runtime inference |
+
+---
+
+## Run It Locally
+
+```bash
+git clone https://github.com/xiaotong-shen/subway-delay-ml-predictor
+cd subway-delay-ml-predictor
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+To retrain the model, run `python notebooks/neuralnet.py` from the `python notebooks/` directory. Training data CSVs are included.
+
+---
+
+## What I'd Do Next
+
+- Pull live TTC delay feeds (the open data API exists) to add a "right now" layer on top of the historical predictions
+- Expand the model to predict delay *cause* categories (mechanical, signal, passenger assistance) — the delay code column in the raw data has this but I left it out of v1
+- Surface the station ranking analysis I have commented out in `app.py` — it's built, just not exposed yet
