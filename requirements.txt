@@ -1,31 +1,4 @@
-# Core Streamlit and Web Application
 streamlit>=1.28.0
-
-# Data Science and Analysis
 pandas>=2.0.0
 numpy>=1.24.0
-
-# Data Visualization
 plotly>=5.15.0
-matplotlib>=3.5.0
-seaborn>=0.11.0
-
-# Machine Learning
-scikit-learn>=1.1.0
-torch>=1.12.0
-torchvision>=0.13.0
-
-# Jupyter and Development
-jupyter>=1.0.0
-ipykernel>=6.0.0
-notebook>=6.4.0
-
-# Geospatial and Mapping
-folium>=0.12.0
-geopandas>=0.10.0
-shapely>=1.8.0
-
-# Utilities and Performance
-tqdm>=4.64.0
-requests>=2.28.0
-
