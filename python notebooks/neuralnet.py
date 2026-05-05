@@ -86,8 +86,10 @@ df["Line"].value_counts()
 
 # drop unneeded columns
 df = df.drop(columns=['Code', 'Min Gap', 'Bound', 'Line', 'Vehicle'])
-# Drop rows where Min Delay is 0
-df = df[df['Min Delay'] > 0]
+# Drop rows where Min Delay is 0 or is an extreme outlier (>60 min)
+# Values above 60 minutes are almost always exceptional incidents unrepresentative of
+# typical station behavior, and including them skews group averages badly in training
+df = df[(df['Min Delay'] > 0) & (df['Min Delay'] <= 60)]
 
 # remove random stations or those that don't actually correspond to a normal subway station
 remove_stations = ["111 SPADINA ROAD", "1900 YONGE MCBRIEN BLD", "1900 YONGE ST- MCBRIEN", "2233 SHEPPARD WEST", "ALL STATIONS", "BLOOR DANFORTH LINE", "YONGE UNIVERSITY LINE", "YONGE UNIVERSITY SUBWA", "EGLINTON STATION (MIGR", "TORONTO TRANSIT COMMIS"]
@@ -204,17 +206,56 @@ df['station_encoded'], station_mapping = pd.factorize(df['Station'])
 num_stations = df['station_encoded'].nunique()
 print("Number of unique stations:", num_stations)
 
-# Create delay severity categories (optional)
-df['delay_severity'] = pd.cut(
-    df['Min Delay'], 
-    bins=[-0.1, 1, 5, 15, float('inf')],
-    labels=['Minimal', 'Minor', 'Moderate', 'Severe']
-)
-print("\nDelay severity distribution:")
-print(df['delay_severity'].value_counts())
+# Extract hour for the pre-computation step later (not used for training aggregation)
+df['hour'] = df['Time_dt'].dt.hour
 
-# For regression, we'll predict the actual delay length
-df['y_length'] = df['Min Delay']
+# Aggregate by operational context flags rather than individual hour/day/month.
+# (station, hour, day_of_week, month) is too fine-grained given ~31K records across
+# 70 × 24 × 7 × 12 ≈ 141K possible slots — average coverage is <1 event per slot,
+# so there's almost no smoothing. Grouping by the binary context flags instead
+# (station × is_morning_rush × is_evening_rush × is_weekend × seasonal flags) yields
+# 70 × 32 = ~2K max groups with ~14 events each — a real signal the model can learn.
+group_keys = [
+    'station_encoded',
+    'is_morning_rush', 'is_evening_rush',
+    'is_weekend',
+    'is_holiday_season', 'is_back_to_school',
+]
+agg_df = df.groupby(group_keys).agg(
+    y_length=('Min Delay', 'mean'),
+    time_norm=('time_norm', 'mean'),
+    month=('month', 'median'),
+    day_of_week=('day_of_week', 'median'),
+    n_events=('Min Delay', 'count'),
+).reset_index()
+agg_df['month'] = agg_df['month'].round().astype(int)
+agg_df['day_of_week'] = agg_df['day_of_week'].round().astype(int)
+
+# Classify severity based on average delay per group.
+# Bins are set at the 25th/75th percentiles of group averages (~5 and ~9 min)
+# to give a roughly balanced 25/50/25 class split — much better than
+# raw-event bins which heavily skewed toward Minor on individual records.
+agg_df['delay_severity'] = pd.cut(
+    agg_df['y_length'],
+    bins=[-0.1, 5.0, 9.0, float('inf')],
+    labels=['Minor', 'Moderate', 'Severe']
+)
+agg_df['delay_severity'] = agg_df['delay_severity'].cat.remove_unused_categories()
+
+print(f"\nAggregated to {len(agg_df):,} groups (from {len(df):,} raw records)")
+print("\nAggregated severity distribution:")
+print(agg_df['delay_severity'].value_counts())
+print(f"\nAverage events per group: {agg_df['n_events'].mean():.1f} (min {agg_df['n_events'].min()}, max {agg_df['n_events'].max()})")
+
+# Add severity to raw_df for EDA plots (use original bins, not aggregated bins)
+df['delay_severity_raw'] = pd.cut(
+    df['Min Delay'],
+    bins=[-0.1, 5, 15, float('inf')],
+    labels=['Minor', 'Moderate', 'Severe']
+)
+raw_df = df.copy()  # keep raw for the later EDA plots
+df = agg_df
+df['y_length'] = df['y_length'].astype(np.float32)
 
 print("\nProcessed data sample:\n", df[['time_norm', 'station_encoded', 'y_length', 'delay_severity']].head())
 
@@ -355,18 +396,22 @@ class MultiOutputModel(nn.Module):
         # Input: 12 temporal features + 16-dim station embedding = 28 total
         input_dim = temporal_features + embedding_dim
         
-        # Shared layers with batch normalization
+        # Shared layers — wider than original (128→64 instead of 64→32) since the
+        # aggregated training signal is cleaner and the model can use extra capacity
         self.shared_layers = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(input_dim, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.3),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Linear(64, 32),
             nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.Dropout(0.2)
         )
-        
+
         # Delay severity classification head (multi-class)
         # No Softmax here — CrossEntropyLoss applies log-softmax internally;
         # stacking Softmax before it squashes values into [0,1] and produces log(~0) = NaN
@@ -375,7 +420,7 @@ class MultiOutputModel(nn.Module):
             nn.ReLU(),
             nn.Linear(16, num_severity_classes)
         )
-        
+
         # Delay length head (regression)
         self.length_layers = nn.Sequential(
             nn.Linear(32, 16),
@@ -434,7 +479,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 # Learning rate scheduler to reduce learning rate when validation loss plateaus
 scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, verbose=True)
 
-num_epochs = 100
+num_epochs = 200
 train_losses = []
 val_losses = []
 val_severity_accuracy = []
@@ -443,7 +488,7 @@ val_maes = []
 # Variables for early stopping
 best_val_loss = float('inf')
 best_model_wts = None
-patience = 7
+patience = 15
 no_improve_epochs = 0
 
 for epoch in range(num_epochs):
@@ -806,9 +851,9 @@ print("Model and predictions saved to files")
 # In[ ]:
 
 
-# Additional analysis: Delay severity by time of day
+# Additional analysis using raw (pre-aggregation) data
 plt.figure(figsize=(10, 6))
-severity_counts = df.groupby([df['Time_dt'].dt.hour, 'delay_severity']).size().unstack()
+severity_counts = raw_df.groupby([raw_df['Time_dt'].dt.hour, 'delay_severity_raw']).size().unstack()
 severity_counts.plot(kind='bar', stacked=True, colormap='viridis')
 plt.title('Delay Severity Distribution by Hour of Day')
 plt.xlabel('Hour')
@@ -816,21 +861,22 @@ plt.ylabel('Number of Delays')
 plt.xticks(rotation=45)
 plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.tight_layout()
+plt.savefig('delay_severity_by_hour.png', dpi=150)
 plt.show()
 
 # Heatmap of delay lengths by station and hour
 plt.figure(figsize=(12, 8))
-station_time_delays = df.pivot_table(
-    values='Min Delay', 
-    index='Station', 
-    columns=df['Time_dt'].dt.hour,
+station_time_delays = raw_df.pivot_table(
+    values='Min Delay',
+    index='Station',
+    columns=raw_df['Time_dt'].dt.hour,
     aggfunc='mean'
 )
-import seaborn as sns
 sns.heatmap(station_time_delays, cmap='YlOrRd', annot=False)
 plt.title('Average Delay Length by Station and Hour')
 plt.xlabel('Hour of Day')
 plt.ylabel('Station')
 plt.tight_layout()
+plt.savefig('delay_heatmap.png', dpi=150)
 plt.show()
 
