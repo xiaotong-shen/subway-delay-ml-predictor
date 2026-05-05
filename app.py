@@ -2,444 +2,399 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import numpy as np
-from datetime import datetime, timedelta
 import json
 
-# Page configuration
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="TTC Subway Delay Predictor",
-    page_icon="🚇",
+    page_title="TTC Delay Predictor",
+    page_icon="subway",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for better styling - Dark mode friendly
+# ── Sandy / Claude-inspired palette ───────────────────────────────────────────
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #4CAF50;
+    /* Global */
+    html, body, [data-testid="stAppViewContainer"] {
+        background-color: #faf8f4;
+        color: #2c2825;
+    }
+    [data-testid="stMain"] { background-color: #faf8f4; }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #f2ede4 !important;
+        border-right: 1px solid #e5ddd2;
+    }
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p { color: #2c2825 !important; }
+
+    /* Typography helpers */
+    .app-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #2c2825;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.2rem 0;
+    }
+    .app-sub {
+        font-size: 0.85rem;
+        color: #6b6560;
+        margin: 0 0 1.25rem 0;
+        padding-bottom: 1.25rem;
+        border-bottom: 1px solid #e5ddd2;
+    }
+    .sec-label {
+        font-size: 0.68rem;
+        font-weight: 600;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: #9e9690;
+        margin-bottom: 0.4rem;
+        display: block;
+    }
+
+    /* Inline detail rows */
+    .drow {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.45rem 0;
+        border-bottom: 1px solid #f0ebe3;
+        font-size: 0.875rem;
+    }
+    .drow:last-child { border-bottom: none; }
+    .dlabel { color: #6b6560; }
+    .dval   { color: #2c2825; font-weight: 500; }
+
+    /* Risk badge */
+    .badge {
+        display: inline-block;
+        padding: 0.2rem 0.65rem;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .badge-low  { background: #e8f3ec; color: #3a7d55; }
+    .badge-mod  { background: #fdf0e4; color: #b86b28; }
+    .badge-high { background: #fce9e7; color: #b03a2e; }
+
+    /* Progress bar */
+    .pbar-wrap { background: #e5ddd2; border-radius: 4px; height: 7px;
+                 margin: 0.6rem 0 1.1rem 0; overflow: hidden; }
+    .pbar-fill { height: 100%; border-radius: 4px; }
+
+    /* Sidebar hint box */
+    .hint-box {
+        margin-top: 1.5rem;
+        padding: 0.75rem;
+        background: #ede8df;
+        border-radius: 8px;
+        font-size: 0.78rem;
+        color: #6b6560;
+        line-height: 1.6;
+    }
+    .hint-box strong { color: #2c2825; }
+
+    /* Footer */
+    .footer {
         text-align: center;
-        margin-bottom: 2rem;
+        color: #9e9690;
+        font-size: 0.78rem;
+        padding: 1.5rem 0 0.25rem 0;
+        border-top: 1px solid #e5ddd2;
+        margin-top: 1.5rem;
     }
-    .metric-card {
-        background-color: #2d3748;
-        color: #e2e8f0;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #4CAF50;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+
+    /* Plotly container bg */
+    .js-plotly-plot { background: transparent !important; }
+
+    /* Streamlit widget tweaks */
+    div[data-baseweb="select"] > div {
+        background-color: #ffffff;
+        border-color: #e5ddd2 !important;
     }
-    .prediction-box {
-        background-color: #2d3748;
-        color: #e2e8f0;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        border: 2px solid #4CAF50;
-        margin: 1rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-    }
-    .metric-card h4, .prediction-box h4 {
-        color: #4CAF50;
-        margin-bottom: 0.5rem;
-    }
-    .metric-card p, .prediction-box p {
-        color: #e2e8f0;
-        margin: 0.5rem 0;
-    }
-    .metric-card strong, .prediction-box strong {
-        color: #81c784;
-    }
-    .sidebar .sidebar-content {
-        background-color: #1a202c;
-    }
-    .stSelectbox > div > div {
-        background-color: #2d3748;
-        color: #e2e8f0;
-    }
-    .stSlider > div > div > div > div {
-        background-color: #4CAF50;
-    }
-    /* Custom progress bar styling */
-    .stProgress > div > div > div > div {
-        background-color: #4CAF50 !important;
-    }
-    .stProgress > div > div > div > div > div {
-        background-color: #4CAF50 !important;
-    }
+    .stMetric > div { background: transparent; }
 </style>
 """, unsafe_allow_html=True)
 
+
+# ── Data ──────────────────────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    """Load and cache the prediction data"""
     try:
-        # Load enriched predictions
-        predictions_df = pd.read_csv("src/routes/resources/enriched_predictions_full.csv")
-        
-        # Load station data JSON for additional info
-        with open("src/routes/resources/station_data.json", "r") as f:
-            station_data = json.load(f)
-            
-        return predictions_df, station_data
+        df = pd.read_csv("src/routes/resources/enriched_predictions_full.csv")
+        with open("src/routes/resources/station_data.json") as f:
+            sd = json.load(f)
+        return df, sd
     except Exception as e:
         st.error(f"Error loading data: {e}")
         return None, None
 
-def create_delay_map(predictions_df, selected_hour, selected_month=None, selected_day_num=None):
-    """Create an interactive map showing delay predictions"""
-    if predictions_df is None:
-        return None
-    
-    # Filter data for selected parameters
-    filtered_data = predictions_df[predictions_df['hour'] == selected_hour].copy()
-    
-    if selected_month is not None:
-        filtered_data = filtered_data[filtered_data['month'] == selected_month]
-    
-    if selected_day_num is not None:
-        filtered_data = filtered_data[filtered_data['day_of_week'] == selected_day_num]
-    
-    if filtered_data.empty:
-        st.warning(f"No data available for the selected parameters")
-        return None
-    
-    # Create the map
-    title = f"TTC Subway Delay Predictions - {selected_hour:02d}:00"
-    if selected_month is not None:
-        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        title += f" ({month_names[selected_month-1]})"
-    if selected_day_num is not None:
-        day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-        title += f" ({day_names[selected_day_num]})"
-    
-    # Create a much more visible size mapping by scaling the likelihood values
-    # The values are between 0.26-0.51, so we'll scale them to be much more visible
-    # Using a much larger multiplier to create dramatic size differences
-    filtered_data['scaled_size'] = (filtered_data['likelihood_of_delay'] - 0.26) * 50
-    
 
-    
+# ── Map ───────────────────────────────────────────────────────────────────────
+def create_delay_map(df, hour, month=None, dow=None):
+    if df is None:
+        return None
+
+    filtered = df[df['hour'] == hour].copy()
+    if month is not None:
+        filtered = filtered[filtered['month'] == month]
+    if dow is not None:
+        filtered = filtered[filtered['day_of_week'] == dow]
+    if filtered.empty:
+        st.warning("No data for these filters.")
+        return None
+
+    agg = filtered.groupby(['station', 'latitude', 'longitude'], as_index=False).agg(
+        likelihood_of_delay=('likelihood_of_delay', 'mean'),
+        delay_severity=('delay_severity', lambda x: x.mode()[0]),
+        delay_length=('delay_length', 'mean'),
+    )
+
+    mn, mx = agg['likelihood_of_delay'].min(), agg['likelihood_of_delay'].max()
+    rng = mx - mn if mx > mn else 1
+    agg['scaled_size'] = ((agg['likelihood_of_delay'] - mn) / rng * 40 + 8).clip(lower=4)
+
     fig = px.scatter_map(
-        filtered_data,
-        lat='latitude',
-        lon='longitude',
+        agg,
+        lat='latitude', lon='longitude',
         size='scaled_size',
         color='likelihood_of_delay',
         hover_name='station',
-        hover_data=['likelihood_of_delay', 'delay_severity', 'delay_length'],
-        color_continuous_scale='RdYlGn_r',  # Red to Green (red = high delay likelihood)
-        size_max=60,
-        zoom=10,
-        center={'lat': 43.6532, 'lon': -79.3832},  # Toronto center
-        title=title
+        hover_data={
+            'likelihood_of_delay': ':.0%',
+            'delay_severity': True,
+            'delay_length': ':.1f',
+            'scaled_size': False,
+            'latitude': False,
+            'longitude': False,
+        },
+        color_continuous_scale=[
+            [0.0, '#3a7d55'],
+            [0.5, '#e8a944'],
+            [1.0, '#c96442'],
+        ],
+        size_max=48,
+        zoom=10.5,
+        center={'lat': 43.6532, 'lon': -79.3832},
     )
-    
     fig.update_layout(
         map_style='carto-positron',
-        height=600,
-        margin={'r': 0, 't': 30, 'l': 0, 'b': 0}
+        height=560,
+        margin={'r': 0, 't': 0, 'l': 0, 'b': 0},
+        paper_bgcolor='rgba(0,0,0,0)',
+        coloraxis_colorbar=dict(
+            title='Risk',
+            tickformat='.0%',
+            thickness=10, len=0.45,
+            bgcolor='rgba(250,248,244,0.9)',
+            bordercolor='#e5ddd2', borderwidth=1,
+        ),
     )
-    
     return fig
 
-def create_delay_timeline(predictions_df, selected_station):
-    """Create a timeline chart showing delay predictions throughout the day"""
-    if predictions_df is None or selected_station is None:
-        return None
-    
-    station_data = predictions_df[predictions_df['station'] == selected_station].copy()
-    
-    if station_data.empty:
-        st.warning(f"No data available for station {selected_station}")
-        return None
-    
-    # Sort by hour
-    station_data = station_data.sort_values('hour')
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=station_data['hour'],
-        y=station_data['likelihood_of_delay'],
-        mode='lines+markers',
-        name='Delay Likelihood',
-        line=dict(color='#1f77b4', width=3),
-        marker=dict(size=8)
-    ))
-    
-    fig.update_layout(
-        title=f"Delay Predictions for {selected_station}",
-        xaxis_title="Hour of Day",
-        yaxis_title="Likelihood of Delay",
-        height=400,
-        showlegend=False
-    )
-    
-    fig.update_xaxes(tickmode='linear', tick0=0, dtick=2)
-    fig.update_yaxes(range=[0, 1])
-    
-    return fig
 
-def get_delay_prediction(predictions_df, station, hour, month=None, day_of_week=None):
-    """Get specific delay prediction for a station and parameters"""
-    if predictions_df is None:
+# ── Timeline ──────────────────────────────────────────────────────────────────
+def create_timeline(df, station, month=None, dow=None):
+    if df is None or station is None:
         return None
-    
-    # Build filter conditions
-    conditions = [
-        (predictions_df['station'] == station),
-        (predictions_df['hour'] == hour)
-    ]
-    
+
+    data = df[df['station'] == station].copy()
     if month is not None:
-        conditions.append(predictions_df['month'] == month)
-    
-    if day_of_week is not None:
-        conditions.append(predictions_df['day_of_week'] == day_of_week)
-    
-    # Apply all conditions using pandas filtering
-    mask = True
-    for condition in conditions:
-        mask = mask & condition
-    prediction = predictions_df[mask]
-    
-    if prediction.empty:
+        data = data[data['month'] == month]
+    if dow is not None:
+        data = data[data['day_of_week'] == dow]
+    if data.empty:
         return None
-    
-    return prediction.iloc[0]
 
+    hourly = data.groupby('hour', as_index=False)['likelihood_of_delay'].mean().sort_values('hour')
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hourly['hour'],
+        y=hourly['likelihood_of_delay'],
+        mode='lines+markers',
+        line=dict(color='#c96442', width=2.5),
+        marker=dict(size=6, color='#c96442', line=dict(color='#ffffff', width=1.5)),
+        fill='tozeroy',
+        fillcolor='rgba(201,100,66,0.07)',
+        hovertemplate='%{x:02d}:00 — %{y:.0%}<extra></extra>',
+    ))
+    fig.update_layout(
+        height=210,
+        margin=dict(l=0, r=0, t=4, b=0),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(
+            tickmode='linear', tick0=6, dtick=3,
+            gridcolor='#f0ebe3', showline=False, zeroline=False,
+            tickfont=dict(size=10, color='#6b6560'),
+        ),
+        yaxis=dict(
+            range=[0, 1], tickformat='.0%',
+            gridcolor='#f0ebe3', showline=False, zeroline=False,
+            tickfont=dict(size=10, color='#6b6560'),
+        ),
+        showlegend=False,
+    )
+    return fig
+
+
+# ── Prediction lookup ─────────────────────────────────────────────────────────
+def get_prediction(df, station, hour, month=None, dow=None):
+    if df is None:
+        return None
+    mask = (df['station'] == station) & (df['hour'] == hour)
+    if month is not None:
+        mask &= df['month'] == month
+    if dow is not None:
+        mask &= df['day_of_week'] == dow
+    rows = df[mask]
+    if rows.empty:
+        return None
+    nums = rows.mean(numeric_only=True).to_dict()
+    nums['station']        = station
+    nums['delay_severity'] = rows['delay_severity'].mode()[0]
+    return nums
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    # Header
-    st.markdown('<h1 class="main-header">🚇 TTC Subway Delay Predictor</h1>', unsafe_allow_html=True)
-    
-    # Load data
-    predictions_df, station_data = load_data()
-    
-    if predictions_df is None:
-        st.error("Failed to load data. Please check the data files.")
+    df, station_data = load_data()
+    if df is None:
+        st.error("Failed to load data.")
         return
-    
-    # Sidebar for controls
-    st.sidebar.header("Controls")
-    
-    # Time selection
-    selected_hour = st.sidebar.slider(
-        "Select Hour of Day",
-        min_value=0,
-        max_value=23,
-        value=8,
-        help="Choose the hour to view delay predictions"
+
+    MONTHS   = ['January','February','March','April','May','June',
+                'July','August','September','October','November','December']
+    DAYS     = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    DAYS_S   = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<p class="app-title">TTC Delay Predictor</p>'
+        '<p class="app-sub">Historical delay patterns for Toronto subway stations</p>',
+        unsafe_allow_html=True,
     )
-    
-    # Month selection
-    selected_month = st.sidebar.selectbox(
-        "Select Month",
-        options=sorted(predictions_df['month'].unique()),
-        index=0,  # January
-        help="Choose the month to view predictions"
-    )
-    
-    # Day of week selection
-    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    selected_day = st.sidebar.selectbox(
-        "Select Day of Week",
-        options=day_names,
-        index=0,  # Monday
-        help="Choose the day of week to view predictions"
-    )
-    selected_day_num = day_names.index(selected_day)
-    
-    # Station selection
-    unique_stations = sorted(predictions_df['station'].unique())
-    selected_station = st.sidebar.selectbox(
-        "Select Station",
-        options=unique_stations,
-        index=0 if 'BLOOR-YONGE' in unique_stations else 0,
-        help="Choose a station to view detailed predictions"
-    )
-    
-    # Main content area
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.markdown('<h3 style="color: #4CAF50;">📍 Interactive Delay Map</h3>', unsafe_allow_html=True)
-        
-        # Create and display the map
-        map_fig = create_delay_map(predictions_df, selected_hour, selected_month, selected_day_num)
+
+    # ── Sidebar ───────────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown('<span class="sec-label">Filters</span>', unsafe_allow_html=True)
+
+        selected_hour = st.slider("Hour of day", 0, 23, 8, format="%02d:00")
+
+        selected_month = st.selectbox(
+            "Month",
+            options=sorted(df['month'].unique()),
+            format_func=lambda m: MONTHS[m - 1],
+        )
+
+        selected_day = st.selectbox("Day of week", DAYS)
+        selected_dow = DAYS.index(selected_day)
+
+        st.markdown('<span class="sec-label" style="margin-top:1rem;display:block">Station</span>', unsafe_allow_html=True)
+        stations   = sorted(df['station'].unique())
+        default_i  = stations.index('BLOOR-YONGE') if 'BLOOR-YONGE' in stations else 0
+        selected_station = st.selectbox("Station", stations, index=default_i, label_visibility="collapsed")
+
+        st.markdown(
+            '<div class="hint-box"><strong>Legend</strong><br>'
+            'Dot size and color both encode delay risk.<br>'
+            '<span style="color:#3a7d55">&#9679;</span> Low &nbsp;'
+            '<span style="color:#e8a944">&#9679;</span> Moderate &nbsp;'
+            '<span style="color:#c96442">&#9679;</span> High</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+    col_map, col_detail = st.columns([3, 1], gap="large")
+
+    with col_map:
+        st.markdown('<span class="sec-label">Interactive Map</span>', unsafe_allow_html=True)
+        map_fig = create_delay_map(df, selected_hour, selected_month, selected_dow)
         if map_fig:
-            st.plotly_chart(map_fig, use_container_width=True)
-        
-        # Map legend with better spacing and styling
-        st.markdown("""
-        <div style="margin-top: 5rem; margin-bottom: 0rem; padding: 1rem; background-color: #2d3748; border-radius: 0.5rem; border-left: 4px solid #4CAF50;">
-            <h4 style="color: #4CAF50; margin-bottom: 1rem;">Map Legend</h4>
-            <ul style="color: #e2e8f0; margin: 0; padding-left: 1.5rem;">
-                <li><strong>Circle Size:</strong> Likelihood of delay (larger = higher likelihood, dramatically scaled for visibility)</li>
-                <li><strong>Circle Color:</strong> Delay likelihood (Red = High, Green = Low)</li>
-                <li><strong>Size Range:</strong> Small circles (20px) = Low risk (~26%), Large circles (60px) = High risk (~51%)</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown('<h3 style="color: #4CAF50;">Station Details</h3>', unsafe_allow_html=True)
-        
-        # Get current prediction
-        current_prediction = get_delay_prediction(predictions_df, selected_station, selected_hour, selected_month, selected_day_num)
-        
-        if current_prediction is not None:
-            # Display prediction metrics
-            # st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric(
-                label="Delay Likelihood",
-                value=f"{current_prediction['likelihood_of_delay']:.1%}",
-                delta=None
+            st.plotly_chart(map_fig, use_container_width=True, config={'displayModeBar': False})
+
+    with col_detail:
+        st.markdown('<span class="sec-label">Station Details</span>', unsafe_allow_html=True)
+
+        pred = get_prediction(df, selected_station, selected_hour, selected_month, selected_dow)
+
+        if pred:
+            likelihood = pred['likelihood_of_delay']
+            delay_len  = pred['delay_length']
+            severity   = pred['delay_severity']
+
+            if likelihood < 0.4:
+                badge_cls, risk_label, bar_color = 'badge-low',  'Low Risk',      '#3a7d55'
+            elif likelihood < 0.65:
+                badge_cls, risk_label, bar_color = 'badge-mod',  'Moderate Risk', '#e8a944'
+            else:
+                badge_cls, risk_label, bar_color = 'badge-high', 'High Risk',     '#c96442'
+
+            # Likelihood + badge
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.markdown(
+                    f'<p style="font-size:2rem;font-weight:700;color:#2c2825;margin:0">'
+                    f'{likelihood:.0%}</p>',
+                    unsafe_allow_html=True,
+                )
+            with c2:
+                st.markdown(
+                    f'<div style="padding-top:0.6rem">'
+                    f'<span class="badge {badge_cls}">{risk_label}</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Progress bar
+            st.markdown(
+                f'<div class="pbar-wrap">'
+                f'<div class="pbar-fill" style="width:{likelihood*100:.1f}%;background:{bar_color}"></div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            
-            # Add a visual progress bar for the likelihood with color coding
-            likelihood = current_prediction['likelihood_of_delay']
-            
-            # Determine color based on risk level
-            if likelihood < 0.3:
-                progress_color = "#4CAF50"  # Green for low risk
-                risk_text = "Low Risk"
-                text_color = "#4CAF50"
-            elif likelihood < 0.7:
-                progress_color = "#FF9800"  # Orange for moderate risk
-                risk_text = "Moderate Risk"
-                text_color = "#FF9800"
-            else:
-                progress_color = "#F44336"  # Red for high risk
-                risk_text = "High Risk"
-                text_color = "#F44336"
-            
-            # Create custom progress bar with dynamic color
-            st.markdown(f"""
-            <div style="margin: 1rem 0;">
-                <div style="background-color: #2d3748; border-radius: 0.5rem; padding: 0.5rem;">
-                    <div style="background-color: {progress_color}; height: 20px; border-radius: 0.5rem; width: {likelihood * 100}%; transition: width 0.3s ease;"></div>
-                </div>
-                <p style="color: {text_color}; text-align: center; margin-top: 0.5rem; font-weight: bold;">{risk_text}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Prediction interpretation
-            likelihood = current_prediction['likelihood_of_delay']
-            if likelihood < 0.3:
-                status = "🟢 Low Risk"
-                color = "green"
-            elif likelihood < 0.7:
-                status = "🟡 Moderate Risk"
-                color = "orange"
-            else:
-                status = "🔴 High Risk"
-                color = "red"
-            
-            # Get month and day names
-            month_names = ['January', 'February', 'March', 'April', 'May', 'June', 
-                          'July', 'August', 'September', 'October', 'November', 'December']
-            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            
-            month_name = month_names[selected_month - 1] if selected_month else "All months"
-            day_name = day_names[selected_day_num] if selected_day_num is not None else "All days"
-            
-            st.markdown(f"""
-            <div class="prediction-box">
-                <h4>Prediction Details</h4>
-                <p><strong>Time:</strong> {selected_hour:02d}:00</p>
-                <p><strong>Date:</strong> {day_name}, {month_name}</p>
-                <p><strong>Status:</strong> <span style="color: {color}">{status}</span></p>
-                <p><strong>Station:</strong> {selected_station}</p>
-                <p><strong>Severity:</strong> {current_prediction['delay_severity']}</p>
-                <p><strong>Delay Length:</strong> {current_prediction['delay_length']:.1f} minutes</p>
-                <p><strong>Coordinates:</strong> {current_prediction['latitude']:.4f}, {current_prediction['longitude']:.4f}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Station timeline
-        st.markdown('<h4 style="color: #4CAF50;">📈 Daily Timeline</h4>', unsafe_allow_html=True)
-        timeline_fig = create_delay_timeline(predictions_df, selected_station)
-        if timeline_fig:
-            st.plotly_chart(timeline_fig, use_container_width=True)
-    
-    # Additional analysis section
-    # st.markdown("---")
-    # st.markdown('<h3 style="color: #4CAF50;">🔍 Analysis & Insights</h3>', unsafe_allow_html=True)
-    
-    # col3, col4, col5, col6 = st.columns(4)
-    
-    # with col3:
-    #     # Overall statistics
-    #     st.markdown('<h4 style="color: #4CAF50;">Overall Statistics</h4>', unsafe_allow_html=True)
-    #     avg_likelihood = predictions_df['likelihood_of_delay'].mean()
-    #     max_likelihood = predictions_df['likelihood_of_delay'].max()
-    #     min_likelihood = predictions_df['likelihood_of_delay'].min()
-        
-    #     st.metric("Average Delay Likelihood", f"{avg_likelihood:.1%}")
-    #     st.metric("Highest Risk", f"{max_likelihood:.1%}")
-    #     st.metric("Lowest Risk", f"{min_likelihood:.1%}")
-    
-    # with col4:
-    #     # Temporal analysis
-    #     st.markdown('<h4 style="color: #4CAF50;">Temporal Analysis</h4>', unsafe_allow_html=True)
-        
-    #     # Weekend vs Weekday
-    #     weekend_stats = predictions_df.groupby('is_weekend')['likelihood_of_delay'].mean()
-    #     weekend_risk = weekend_stats.get(1, 0)
-    #     weekday_risk = weekend_stats.get(0, 0)
-        
-    #     st.metric("Weekend Risk", f"{weekend_risk:.1%}")
-    #     st.metric("Weekday Risk", f"{weekday_risk:.1%}")
-        
-    #     # Seasonal analysis
-    #     monthly_avg = predictions_df.groupby('month')['likelihood_of_delay'].mean()
-    #     worst_month = monthly_avg.idxmax()
-    #     best_month = monthly_avg.idxmin()
-        
-    #     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-    #                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    #     st.metric("Worst Month", month_names[worst_month-1])
-    #     st.metric("Best Month", month_names[best_month-1])
-    
-    # with col5:
-    #     # Peak hours analysis
-    #     st.markdown('<h4 style="color: #4CAF50;">Peak Hours Analysis</h4>', unsafe_allow_html=True)
-    #     hourly_avg = predictions_df.groupby('hour')['likelihood_of_delay'].mean().reset_index()
-    #     peak_hour = hourly_avg.loc[hourly_avg['likelihood_of_delay'].idxmax()]
-        
-    #     st.metric("Peak Risk Hour", f"{int(peak_hour['hour']):02d}:00")
-    #     st.metric("Peak Risk Level", f"{peak_hour['likelihood_of_delay']:.1%}")
-        
-    #     # Day of week analysis
-    #     day_avg = predictions_df.groupby('day_of_week')['likelihood_of_delay'].mean()
-    #     worst_day = day_avg.idxmax()
-    #     day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    #     st.metric("Worst Day", day_names[worst_day])
-    
-    # with col6:
-    #     # Station rankings
-    #     st.markdown('<h4 style="color: #4CAF50;">Station Rankings</h4>', unsafe_allow_html=True)
-    #     station_avg = predictions_df.groupby('station')['likelihood_of_delay'].mean().sort_values(ascending=False)
-        
-    #     st.write("**Highest Risk Stations:**")
-    #     for i, (station, risk) in enumerate(station_avg.head(3).items()):
-    #         st.write(f"{i+1}. {station}: {risk:.1%}")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style='text-align: center; color: #666;'>
-        <p>Built with Streamlit • TTC Subway Delay Prediction System</p>
-        <p>Data based on neural network predictions from historical TTC data</p>
-    </div>
-    """, unsafe_allow_html=True)
+
+            # Detail rows — one st.markdown per row to keep HTML simple
+            rows = [
+                ("Station",   selected_station),
+                ("Time",      f"{selected_hour:02d}:00"),
+                ("Day",       f"{DAYS_S[selected_dow]}, {MONTHS[selected_month-1][:3]}"),
+                ("Severity",  severity),
+                ("Avg delay", f"{delay_len:.1f} min"),
+            ]
+            for label, val in rows:
+                st.markdown(
+                    f'<div class="drow">'
+                    f'<span class="dlabel">{label}</span>'
+                    f'<span class="dval">{val}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                '<p style="color:#6b6560;font-size:0.875rem">No data for these filters.</p>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            '<span class="sec-label" style="margin-top:1rem;display:block">Daily pattern</span>',
+            unsafe_allow_html=True,
+        )
+        tl = create_timeline(df, selected_station, selected_month, selected_dow)
+        if tl:
+            st.plotly_chart(tl, use_container_width=True, config={'displayModeBar': False})
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="footer">TTC Subway Delay Predictor &middot; '
+        'Random Forest model trained on 2021–2024 TTC delay data</div>',
+        unsafe_allow_html=True,
+    )
+
 
 if __name__ == "__main__":
     main()

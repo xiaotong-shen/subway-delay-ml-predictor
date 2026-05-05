@@ -27,8 +27,8 @@ venv/
 ENV/
 env/
 
-# Streamlit
-.streamlit/
+# Streamlit secrets only — config.toml is tracked
+.streamlit/secrets.toml
 
 # Jupyter Notebook
 .ipynb_checkpoints
